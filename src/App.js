@@ -3,7 +3,7 @@ import styled from 'styled-components';
 import Layout from './components/layout';
 import SEO from './components/seo';
 import Papa from 'papaparse';
-import { OpenStreetMapProvider } from 'leaflet-geosearch';
+import { OpenStreetMapProvider, GoogleProvider, EsriProvider } from 'leaflet-geosearch';
 import PrivateMarker from './assets/private-marker.svg';
 
 const Wrapper = styled.div`
@@ -72,12 +72,55 @@ const App = () => {
   const [isFileSelected, setIsFileSelected] = useState(false);
   const [itemsProgress, setItemsProgress] = useState({ overall: 0, processed: 0});
 
+  const provider = new EsriProvider();
+
 
   const onChangeInput = (e) => {
     const file = e.target.files[0];
     setSelectedFile(file);
     setIsFileSelected(true);
   };
+
+  const getPointData = async (dataPoint) => {
+    try {
+      const { country, city, zipCode, category, link } = dataPoint;
+
+      let searchFor = `${country} ${city} ${zipCode}`;
+
+      let locationFromCache = localStorage.getItem(`${searchFor} - ${category} - ${link}`);
+      if (locationFromCache) {
+        return JSON.parse(locationFromCache);
+      }
+
+      let geoResults = await provider.search({query: searchFor});
+      if (!geoResults || !geoResults[0]) {
+        searchFor = `${country} ${zipCode}`;
+
+        let locationFromCache = localStorage.getItem(`${searchFor} - ${category} - ${link}`);
+        if (locationFromCache) {
+          return JSON.parse(locationFromCache);
+        }
+
+        geoResults = await provider.search({query: searchFor});
+      }
+
+      if (geoResults && geoResults[0]) {
+        const lat = geoResults[0].y;
+        const lng = geoResults[0].x;
+
+        const location = { ...dataPoint, lat, lng};
+        localStorage.setItem(`${searchFor} - ${category} - ${link}`, JSON.stringify(location));
+
+        return location;
+      } else {
+        return dataPoint;
+      }
+    } catch (error) {
+      console.error(error);
+      console.warn('Cannot find for: ', dataPoint);
+      return dataPoint;
+    }
+  }
 
   useEffect(()=> {
     if (selectedFile !== undefined) {
@@ -92,60 +135,50 @@ const App = () => {
         const convertedMarkers = [];
         let counter = 1;
 
-        for (let index = 0; index < parsedFile.data.length; index ++){
-          const provider = new OpenStreetMapProvider();
+        const promises = [];
+
+        for (let index = 0; index < parsedFile.data.length; index ++) {
           const element = parsedFile.data[index];
-          const country = element.Country;
-          const city = element.City;
-          const zipCode = element['ZIP-code'];
-          const link = element.Link;
-          const category = element.Type;
-          zipCode.trim();
 
-          let searchFor = `${country} ${city} ${zipCode}`;
-          let geoResults = await provider.search({query: searchFor});
-          if (!geoResults || !geoResults[0]) {
-            searchFor = `${country} ${zipCode}`;
-            geoResults = await provider.search({query: searchFor});
+          const point = {
+            country: element.Country,
+            city: element.City,
+            link: element.Link,
+            category: element.Type,
+            zipCode: element['ZIP-code']
           }
-          if (geoResults && geoResults[0]) {
-            const lat = geoResults[0].y;
-            const lng = geoResults[0].x;
-            element.lat = lat;
-            element.lng = lng;
-            delete element['ZIP-code'];
-            delete element.Source;
-            delete element.City;
-            
-            const location = {counter: counter, lat: element.lat, lng: element.lng, link: link, category: category};
 
-            const countryIndex = convertedMarkers.findIndex(item => item.country === country);
+          promises.push(getPointData(point));
 
-            if (countryIndex < 0) {
-              convertedMarkers.push({country: country, locations: [location]});
-            } 
-            else {
-              const locationIndex = convertedMarkers[countryIndex].locations.findIndex(item => item.lat === location.lat && item.lng === location.lng && item.category === location.category);
+          if (promises.length === 10 || index === parsedFile.data.length - 1) {
+            const locations = await Promise.all(promises);
 
-              if (locationIndex < 0) {
-                convertedMarkers[countryIndex].locations.push(location);
-              } else {
-                convertedMarkers[countryIndex].locations[locationIndex].counter++;
+            locations.forEach(location => {
+              const countryIndex = convertedMarkers.findIndex(item => item.country === location.country);
+
+              if (countryIndex < 0) {
+                convertedMarkers.push({country: location.country, locations: [location]});
               }
-            }
+              else {
+                const locationIndex = convertedMarkers[countryIndex].locations.findIndex(item => item.lat === location.lat && item.lng === location.lng && item.category === location.category);
 
-          } else {
-            console.warn('Cannot find for: ', element);
-            console.warn('GeoResult: ', geoResults);
+                if (locationIndex < 0) {
+                  convertedMarkers[countryIndex].locations.push({...location, counter: 1});
+                } else {
+                  convertedMarkers[countryIndex].locations[locationIndex].counter++;
+                }
+              }
+            });
+
+            promises.length = 0;
           }
 
-            const fillBar = (index / parsedFile.data.length) * 100;
-            setItemsProgress({ overall: parsedFile.data.length, processed: index});
-            setProgresBarWidth(fillBar);
-          //})
+          const fillBar = (index / parsedFile.data.length) * 100;
+          setItemsProgress({ overall: parsedFile.data.length, processed: index});
+          setProgresBarWidth(fillBar);
         }
 
-        
+
 
         const finalResult = Array.from(new Set(convertedMarkers.map(JSON.stringify))).map(JSON.parse);
 
@@ -154,7 +187,7 @@ const App = () => {
       fileReader.readAsText(selectedFile);
     }
   }, [selectedFile])
-  
+
   const downloadFile = () => {
     if(!window.File || !window.FileReader || !window.FileList || !window.Blob){
       alert('The File api are not fully supported for this browser');
