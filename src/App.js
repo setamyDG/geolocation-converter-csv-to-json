@@ -93,9 +93,6 @@ const App = () => {
         let counter = 1;
 
         for (let index = 0; index < parsedFile.data.length; index ++){
-          if(index > 15){
-            return;
-          }
           const provider = new OpenStreetMapProvider();
           const element = parsedFile.data[index];
           const country = element.Country;
@@ -105,8 +102,12 @@ const App = () => {
           const category = element.Type;
           zipCode.trim();
 
-          const searchFor = zipCode ? `${country} ${city} ${zipCode}` : country && city;
-          const geoResults = await provider.search({query: searchFor});
+          let searchFor = `${country} ${city} ${zipCode}`;
+          let geoResults = await provider.search({query: searchFor});
+          if (!geoResults || !geoResults[0]) {
+            searchFor = `${country} ${zipCode}`;
+            geoResults = await provider.search({query: searchFor});
+          }
           if (geoResults && geoResults[0]) {
             const lat = geoResults[0].y;
             const lng = geoResults[0].x;
@@ -132,8 +133,6 @@ const App = () => {
                 convertedMarkers[countryIndex].locations[locationIndex].counter++;
               }
             }
-
-            console.log(convertedMarkers);
 
           } else {
             console.warn('Cannot find for: ', element);
